@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const express = require('express');
 const WebSocket = require('ws');
-const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser, getAllUsersProgress } = require('./src/db/mongodb');
+const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser, getAllUsersProgress, deleteUser, updateUserProgressManual } = require('./src/db/mongodb');
 
 let mainWindow;
 
@@ -26,10 +26,43 @@ const port = 3000;
 expressApp.get('/api/progress', async (req, res) => {
   try {
     const progressData = await getAllUsersProgress();
+    console.log('🟡 Datos enviados por /api/progress:', progressData); // Depuración
     res.json(progressData);
   } catch (e) {
     console.error('❌ Error al obtener datos de progreso:', e);
     res.status(500).json({ error: 'Error al obtener datos de progreso' });
+  }
+});
+
+expressApp.post('/api/delete-user', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    await deleteUser(userId);
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ event: 'userDeleted', userId }));
+      }
+    });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('❌ Error al eliminar usuario:', e);
+    res.status(500).json({ success: false, error: 'Error al eliminar usuario' });
+  }
+});
+
+expressApp.post('/api/update-user-progress', async (req, res) => {
+  try {
+    const { userId, progress } = req.body;
+    await updateUserProgressManual(userId, progress);
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ event: 'progressUpdated', userId }));
+      }
+    });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('❌ Error al actualizar progreso manualmente:', e);
+    res.status(500).json({ success: false, error: 'Error al actualizar progreso' });
   }
 });
 
@@ -50,7 +83,6 @@ wss.on('connection', (ws) => {
 ipcMain.handle('update-user-progress', async (event, userId, vocal) => {
   try {
     await updateUserProgress(userId, vocal);
-    // Notificar a todos los clientes WebSocket
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({ event: 'progressUpdated', userId, vocal }));
@@ -61,6 +93,10 @@ ipcMain.handle('update-user-progress', async (event, userId, vocal) => {
     console.error('❌ Error al actualizar progreso desde main.js:', e);
     return { success: false };
   }
+});
+
+ipcMain.handle('get-shiny-port', () => {
+  return 5318; // Puerto fijo que ya funciona
 });
 
 // Otros handlers...
@@ -112,10 +148,6 @@ ipcMain.handle('register-user', async (event, data) => {
     console.error('❌ Error al registrar usuario desde main.js:', e);
     return { success: false, message: 'Error al registrar el usuario.' };
   }
-});
-
-ipcMain.handle('get-shiny-port', () => {
-  return 5318; // Placeholder, ajusta si Shiny usa otro puerto
 });
 
 ipcMain.on('redirect-to-login', () => {

@@ -207,6 +207,22 @@ async function testAuth(email, password) {
   return result;
 }
 
+// src/db/mongodb.js
+async function deleteUser(userId) {
+  const db = await getDb();
+  await db.collection('usuarios').deleteOne({ userId });
+  await db.collection('progreso_usuarios').deleteOne({ userId });
+}
+
+async function updateUserProgressManual(userId, progress) {
+  const db = await getDb();
+  await db.collection('progreso_usuarios').updateOne(
+    { userId },
+    { $set: { progress } },
+    { upsert: true }
+  );
+}
+
 module.exports = {
   connect,
   insertUser,
