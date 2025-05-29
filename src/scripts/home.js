@@ -19,4 +19,16 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     console.log(`✅ Usuario autenticado: ${userId}`);
   }
+
+  const adminBtn = document.getElementById('adminBtn');
+  const isAdmin = localStorage.getItem('isAdmin') === 'true';
+  if (isAdmin) {
+    console.log('✅ Mostrando botón de administración');
+    adminBtn.classList.remove('hidden');
+    adminBtn.addEventListener('click', () => {
+      window.location.href = 'admin.html';
+    });
+  } else {
+    console.log('❌ Ocultando botón de administración');
+  }
 });
