@@ -20,16 +20,20 @@ fetch_progress_data <- function() {
     }
     data <- fromJSON(rawToChar(response$content))
     print("Datos devueltos por /api/progress:")
-    print(data)  # Depuración: imprime los datos para inspeccionarlos
+    print(str(data))  # Usar str() para inspeccionar la estructura de los datos
     if (is.null(data) || length(data) == 0) {
       message("No se recibieron datos válidos")
       return(NULL)
     }
-    # Convertir a data frame
-    data <- as.data.frame(data)
+    # Convertir a data frame y asegurar que userId sea una cadena
+    data <- as.data.frame(data, stringsAsFactors = FALSE)
     if (nrow(data) == 0) {
       message("No hay filas en los datos")
       return(NULL)
+    }
+    # Asegurarse de que userId sea una cadena y manejar valores nulos
+    if ("userId" %in% names(data)) {
+      data$userId <- ifelse(is.na(data$userId) | is.null(data$userId), "N/A", as.character(data$userId))
     }
     # Desanidar la columna progress para la tabla
     if ("progress" %in% names(data)) {
@@ -67,16 +71,16 @@ ui <- fluidPage(
       selectInput("userFilter", "Filtrar por Nombre:", choices = "Todos"),
       selectInput("vocalFilter", "Filtrar por Vocal:", choices = c("Todas", "a", "e", "i", "o", "u")),
       actionButton("deleteUserBtn", "Eliminar Usuario Seleccionado"),
-      actionButton("editProgressBtn", "Editar Progreso"),
-      textInput("editUserId", "ID de Usuario a Editar:", ""),
-      textInput("newProgress", "Nuevo Progreso (JSON, ej. {'a': 5, 'e': 3}):", ""),
-      h4("Configuración"),
-      sliderInput("updateInterval", "Intervalo de actualización (segundos):",
-                  min = 5, max = 60, value = 10, step = 5)
+      h4("Editar Progreso"),
+      uiOutput("editUserControls"),
+      actionButton("saveProgressBtn", "Guardar Progreso")
     ),
     mainPanel(
       h3("Lista de Usuarios"),
       DTOutput("userTable"),
+      h3("Detalles Gráficos"),
+      plotOutput("userDetailPlot", height = "300px"),
+      plotOutput("vocalDetailPlot", height = "300px"),
       h3("Progreso Promedio por Vocal"),
       plotOutput("averageProgressPlot"),
       h3("Progreso Individual por Usuario"),
@@ -86,7 +90,7 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
-  rv <- reactiveValues(trigger = 0, selectedUser = NULL)
+  rv <- reactiveValues(trigger = 0, selectedUser = NULL, userProgress = list())
 
   # Conectar a WebSocket
   ws <- WebSocket$new("ws://localhost:8080")
@@ -110,22 +114,9 @@ server <- function(input, output, session) {
     fetch_progress_data()
   })
 
-  # Obtener datos periódicamente como fallback
-  progressDataFallback <- reactivePoll(
-    intervalMillis = reactive(input$updateInterval * 1000),
-    session = session,
-    checkFunc = function() {
-      Sys.time()
-    },
-    valueFunc = fetch_progress_data
-  )
-
   # Seleccionar la fuente de datos
   dataSource <- reactive({
     data <- progressData()
-    if (is.null(data)) {
-      data <- progressDataFallback()
-    }
     data
   })
 
@@ -141,26 +132,38 @@ server <- function(input, output, session) {
     }
   })
 
-  # Tabla de usuarios
-  output$userTable <- renderDT({
+  # Reactive para los datos filtrados
+  filteredData <- reactive({
     data <- dataSource()
     if (is.null(data) || !is.data.frame(data) || nrow(data) == 0) {
-      return(DT::datatable(data.frame()))
+      return(NULL)
     }
 
     filtered_data <- data
     if (input$userFilter != "Todos") {
-      filtered_data <- filtered_data[filtered_data$nombre == input$userFilter, ]
+      filtered_data <- filtered_data[filtered_data$nombre == input$userFilter, , drop = FALSE]
     }
     if (input$vocalFilter != "Todas") {
       vocal <- paste0("progress.", input$vocalFilter)
-      filtered_data <- filtered_data[filtered_data[[vocal]] > 0, ]
+      if (vocal %in% names(filtered_data)) {
+        filtered_data <- filtered_data[filtered_data[[vocal]] > 0, , drop = FALSE]
+      }
+    }
+
+    filtered_data
+  })
+
+  # Tabla de usuarios
+  output$userTable <- renderDT({
+    filtered_data <- filteredData()
+    if (is.null(filtered_data) || nrow(filtered_data) == 0) {
+      return(DT::datatable(data.frame()))
     }
 
     dt_data <- data.frame(
       Nombre = filtered_data$nombre %||% "N/A",
       Email = filtered_data$email %||% "N/A",
-      UserId = filtered_data$userId %||% "N/A",
+      UserId = as.character(filtered_data$userId %||% "N/A"),  # Forzar a cadena
       Progreso_A = filtered_data$progress.a %||% 0,
       Progreso_E = filtered_data$progress.e %||% 0,
       Progreso_I = filtered_data$progress.i %||% 0,
@@ -174,56 +177,191 @@ server <- function(input, output, session) {
   # Actualizar selectedUser cuando se seleccione una fila
   observeEvent(input$userTable_rows_selected, {
     selected_row <- input$userTable_rows_selected
-    if (length(selected_row)) {
-      data <- dataSource()
-      if (is.data.frame(data) && nrow(data) >= selected_row) {
-        rv$selectedUser <- data$userId[selected_row]
-        updateTextInput(session, "editUserId", value = rv$selectedUser)
+    print("Fila seleccionada en DT:", selected_row)  # Depuración
+    if (length(selected_row) > 0) {
+      filtered_data <- filteredData()
+      if (is.null(filtered_data) || nrow(filtered_data) == 0) {
+        rv$selectedUser <- NULL
+        rv$userProgress <- list()
+        return()
       }
+
+      # Obtener el userId directamente de la tabla renderizada
+      dt_data <- data.frame(
+        Nombre = filtered_data$nombre %||% "N/A",
+        Email = filtered_data$email %||% "N/A",
+        UserId = as.character(filtered_data$userId %||% "N/A"),  # Forzar a cadena
+        Progreso_A = filtered_data$progress.a %||% 0,
+        Progreso_E = filtered_data$progress.e %||% 0,
+        Progreso_I = filtered_data$progress.i %||% 0,
+        Progreso_O = filtered_data$progress.o %||% 0,
+        Progreso_U = filtered_data$progress.u %||% 0,
+        stringsAsFactors = FALSE
+      )
+      # Imprimir UserId de forma segura para evitar coerción
+      cat("Columna UserId de la tabla renderizada:\n")
+      cat(paste(dt_data$UserId, collapse = ", "), "\n")
+      cat("Valor de UserId en la fila seleccionada: ", dt_data$UserId[selected_row], "\n")
+
+      if (selected_row > 0 && selected_row <= nrow(dt_data)) {
+        selected_user_id <- dt_data$UserId[selected_row]
+        if (!is.na(selected_user_id) && selected_user_id != "N/A") {
+          rv$selectedUser <- as.character(selected_user_id)
+          cat("Usuario seleccionado: ", rv$selectedUser, "\n")
+          # Cargar el progreso actual del usuario seleccionado
+          user_data <- filtered_data[filtered_data$userId == rv$selectedUser, , drop = FALSE]
+          if (nrow(user_data) > 0) {
+            progress <- user_data[1, c("progress.a", "progress.e", "progress.i", "progress.o", "progress.u")]
+            rv$userProgress <- as.list(progress)
+          } else {
+            rv$userProgress <- list()
+          }
+        } else {
+          cat("UserId inválido en la fila seleccionada: ", selected_user_id, "\n")
+          rv$selectedUser <- NULL
+          rv$userProgress <- list()
+        }
+      } else {
+        cat("Índice de fila inválido: ", selected_row, "\n")
+        rv$selectedUser <- NULL
+        rv$userProgress <- list()
+      }
+    } else {
+      rv$selectedUser <- NULL
+      rv$userProgress <- list()
+    }
+  })
+
+  # Generar controles para editar progreso
+  output$editUserControls <- renderUI({
+    if (!is.null(rv$selectedUser)) {
+      tagList(
+        h5("Editar Progreso para ", rv$selectedUser),
+        p("Ingresa el nuevo progreso para cada vocal:"),
+        numericInput("progressA", "A:", value = rv$userProgress$progress.a %||% 0, min = 0),
+        numericInput("progressE", "E:", value = rv$userProgress$progress.e %||% 0, min = 0),
+        numericInput("progressI", "I:", value = rv$userProgress$progress.i %||% 0, min = 0),
+        numericInput("progressO", "O:", value = rv$userProgress$progress.o %||% 0, min = 0),
+        numericInput("progressU", "U:", value = rv$userProgress$progress.u %||% 0, min = 0)
+      )
+    } else {
+      p("Selecciona un usuario en la tabla para editar su progreso.")
     }
   })
 
   # Acción para eliminar usuario
   observeEvent(input$deleteUserBtn, {
     if (!is.null(rv$selectedUser)) {
+      cat("Eliminando usuario con ID: ", rv$selectedUser, "\n")
       response <- httr::POST("http://localhost:3000/api/delete-user",
                              body = list(userId = rv$selectedUser),
                              encode = "json")
+      cat("Respuesta de eliminación: ", response, "\n")
       if (http_status(response)$category == "Success") {
         showNotification("Usuario eliminado con éxito", type = "message")
         rv$trigger <- rv$trigger + 1
+        rv$selectedUser <- NULL
+        rv$userProgress <- list()
       } else {
         showNotification("Error al eliminar usuario", type = "error")
       }
+    } else {
+      showNotification("Por favor selecciona un usuario en la tabla", type = "warning")
     }
   })
 
-  # Acción para editar progreso
-  observeEvent(input$editProgressBtn, {
-    if (!is.null(rv$selectedUser) && nchar(input$newProgress) > 0) {
-      progress <- jsonlite::fromJSON(input$newProgress)
+  # Acción para guardar progreso
+  observeEvent(input$saveProgressBtn, {
+    if (!is.null(rv$selectedUser)) {
+      progress <- list(
+        a = as.integer(input$progressA),
+        e = as.integer(input$progressE),
+        i = as.integer(input$progressI),
+        o = as.integer(input$progressO),
+        u = as.integer(input$progressU)
+      )
+      cat("Guardando progreso para usuario: ", rv$selectedUser, "\n")
+      cat("Progreso enviado: ", progress, "\n")
       response <- httr::POST("http://localhost:3000/api/update-user-progress",
                              body = list(userId = rv$selectedUser, progress = progress),
                              encode = "json")
+      cat("Respuesta de actualización: ", response, "\n")
       if (http_status(response)$category == "Success") {
         showNotification("Progreso actualizado con éxito", type = "message")
         rv$trigger <- rv$trigger + 1
+        # Actualizar rv$userProgress con los nuevos valores
+        rv$userProgress <- progress
       } else {
         showNotification("Error al actualizar progreso", type = "error")
       }
+    } else {
+      showNotification("Por favor selecciona un usuario en la tabla", type = "warning")
+    }
+  })
+
+  # Gráfico de detalles del usuario seleccionado
+  output$userDetailPlot <- renderPlot({
+    data <- dataSource()
+    if (is.null(data) || !is.data.frame(data) || nrow(data) == 0 || is.null(rv$selectedUser)) {
+      return(ggplot() + ggtitle("Selecciona un usuario para ver detalles"))
+    }
+
+    user_data <- data[data$userId == rv$selectedUser, , drop = FALSE]
+    cat("Datos del usuario seleccionado para userDetailPlot:\n")
+    print(user_data)
+    if (nrow(user_data) == 0) {
+      return(ggplot() + ggtitle("Usuario no encontrado"))
+    }
+
+    progress_long <- data.frame(
+      Vocal = c("A", "E", "I", "O", "U"),
+      Progreso = c(user_data$progress.a[1], user_data$progress.e[1], user_data$progress.i[1], user_data$progress.o[1], user_data$progress.u[1])
+    )
+
+    ggplot(progress_long, aes(x = Vocal, y = Progreso, fill = Vocal)) +
+      geom_bar(stat = "identity") +
+      theme_minimal() +
+      labs(title = paste("Progreso de", user_data$nombre[1]), y = "Progreso", x = "Vocal") +
+      scale_fill_manual(values = c("A" = "#FF6F61", "E" = "#6B5B95", "I" = "#88B04B", "O" = "#F7CAC9", "U" = "#92A8D1"))
+  })
+
+  # Gráfico de detalles de la vocal seleccionada
+  output$vocalDetailPlot <- renderPlot({
+    data <- dataSource()
+    if (is.null(data) || !is.data.frame(data) || nrow(data) == 0 || input$vocalFilter == "Todas") {
+      return(ggplot() + ggtitle("Selecciona una vocal para ver detalles"))
+    }
+
+    vocal <- paste0("progress.", input$vocalFilter)
+    if (vocal %in% names(data)) {
+      filtered_data <- data[data[[vocal]] > 0, , drop = FALSE]
+      if (nrow(filtered_data) == 0) {
+        return(ggplot() + ggtitle(paste("No hay progreso para la vocal", input$vocalFilter)))
+      }
+
+      progress_long <- data.frame(
+        Nombre = filtered_data$nombre,
+        Progreso = filtered_data[[vocal]]
+      )
+
+      ggplot(progress_long, aes(x = Nombre, y = Progreso, fill = Nombre)) +
+        geom_bar(stat = "identity") +
+        theme_minimal() +
+        labs(title = paste("Progreso para vocal", toupper(input$vocalFilter)), y = "Progreso", x = "Usuario") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        scale_fill_manual(values = rainbow(nrow(progress_long)))
+    } else {
+      return(ggplot() + ggtitle("Vocal no válida"))
     }
   })
 
   # Gráfico de progreso promedio por vocal
   output$averageProgressPlot <- renderPlot({
     data <- dataSource()
-    print("Datos para la gráfica promedio:")
-    print(str(data))  # Depuración
     if (is.null(data) || !is.data.frame(data) || nrow(data) == 0) {
       return(ggplot() + ggtitle("No se pudieron obtener datos"))
     }
 
-    # Usar las columnas desanidadas directamente
     averages <- data %>%
       summarise(
         a = mean(progress.a, na.rm = TRUE),
@@ -244,13 +382,10 @@ server <- function(input, output, session) {
   # Gráfico de progreso individual
   output$individualProgressPlot <- renderPlot({
     data <- dataSource()
-    print("Datos para la gráfica individual:")
-    print(str(data))  # Depuración
     if (is.null(data) || !is.data.frame(data) || nrow(data) == 0) {
       return(ggplot() + ggtitle("No se pudieron obtener datos"))
     }
 
-    # Usar las columnas desanidadas directamente
     progress_long <- data %>%
       select(nombre, progress.a, progress.e, progress.i, progress.o, progress.u) %>%
       rename(a = progress.a, e = progress.e, i = progress.i, o = progress.o, u = progress.u) %>%
