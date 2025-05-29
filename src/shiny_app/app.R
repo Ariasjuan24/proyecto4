@@ -70,10 +70,8 @@ ui <- fluidPage(
       h4("Filtros"),
       selectInput("userFilter", "Filtrar por Nombre:", choices = "Todos"),
       selectInput("vocalFilter", "Filtrar por Vocal:", choices = c("Todas", "a", "e", "i", "o", "u")),
-      actionButton("deleteUserBtn", "Eliminar Usuario Seleccionado"),
-      h4("Editar Progreso"),
+      h4("Ver progreso de los usuarios"),
       uiOutput("editUserControls"),
-      actionButton("saveProgressBtn", "Guardar Progreso")
     ),
     mainPanel(
       h3("Lista de Usuarios"),
@@ -232,72 +230,23 @@ server <- function(input, output, session) {
     }
   })
 
-  # Generar controles para editar progreso
+  # Generar controles para ver progreso
   output$editUserControls <- renderUI({
     if (!is.null(rv$selectedUser)) {
       tagList(
-        h5("Editar Progreso para ", rv$selectedUser),
-        p("Ingresa el nuevo progreso para cada vocal:"),
-        numericInput("progressA", "A:", value = rv$userProgress$progress.a %||% 0, min = 0),
-        numericInput("progressE", "E:", value = rv$userProgress$progress.e %||% 0, min = 0),
-        numericInput("progressI", "I:", value = rv$userProgress$progress.i %||% 0, min = 0),
-        numericInput("progressO", "O:", value = rv$userProgress$progress.o %||% 0, min = 0),
-        numericInput("progressU", "U:", value = rv$userProgress$progress.u %||% 0, min = 0)
+        h5("Progreso para ", rv$selectedUser),
+        p("Progreso por vocal:"),
+        p(paste("A:", rv$userProgress$progress.a %||% 0)),
+        p(paste("E:", rv$userProgress$progress.e %||% 0)),
+        p(paste("I:", rv$userProgress$progress.i %||% 0)),
+        p(paste("O:", rv$userProgress$progress.o %||% 0)),
+        p(paste("U:", rv$userProgress$progress.u %||% 0))
       )
     } else {
-      p("Selecciona un usuario en la tabla para editar su progreso.")
+      p("Selecciona un usuario en la tabla para ver su progreso.")
     }
   })
 
-  # Acción para eliminar usuario
-  observeEvent(input$deleteUserBtn, {
-    if (!is.null(rv$selectedUser)) {
-      cat("Eliminando usuario con ID: ", rv$selectedUser, "\n")
-      response <- httr::POST("http://localhost:3000/api/delete-user",
-                             body = list(userId = rv$selectedUser),
-                             encode = "json")
-      cat("Respuesta de eliminación: ", response, "\n")
-      if (http_status(response)$category == "Success") {
-        showNotification("Usuario eliminado con éxito", type = "message")
-        rv$trigger <- rv$trigger + 1
-        rv$selectedUser <- NULL
-        rv$userProgress <- list()
-      } else {
-        showNotification("Error al eliminar usuario", type = "error")
-      }
-    } else {
-      showNotification("Por favor selecciona un usuario en la tabla", type = "warning")
-    }
-  })
-
-  # Acción para guardar progreso
-  observeEvent(input$saveProgressBtn, {
-    if (!is.null(rv$selectedUser)) {
-      progress <- list(
-        a = as.integer(input$progressA),
-        e = as.integer(input$progressE),
-        i = as.integer(input$progressI),
-        o = as.integer(input$progressO),
-        u = as.integer(input$progressU)
-      )
-      cat("Guardando progreso para usuario: ", rv$selectedUser, "\n")
-      cat("Progreso enviado: ", progress, "\n")
-      response <- httr::POST("http://localhost:3000/api/update-user-progress",
-                             body = list(userId = rv$selectedUser, progress = progress),
-                             encode = "json")
-      cat("Respuesta de actualización: ", response, "\n")
-      if (http_status(response)$category == "Success") {
-        showNotification("Progreso actualizado con éxito", type = "message")
-        rv$trigger <- rv$trigger + 1
-        # Actualizar rv$userProgress con los nuevos valores
-        rv$userProgress <- progress
-      } else {
-        showNotification("Error al actualizar progreso", type = "error")
-      }
-    } else {
-      showNotification("Por favor selecciona un usuario en la tabla", type = "warning")
-    }
-  })
 
   # Gráfico de detalles del usuario seleccionado
   output$userDetailPlot <- renderPlot({

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "start \"\" \"c:/Users/juana/OneDrive/Documentos/sem8/HDnoE/proyecto4/src/shiny_app/run_shiny.bat\" && electron .",
     "dev": "electron . --dev"
   },
   "dependencies": {
