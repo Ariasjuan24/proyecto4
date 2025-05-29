@@ -1,0 +1,97 @@
+const { app, BrowserWindow, ipcMain } = require('electron');
+const path = require('path');
+const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser } = require('./src/db/mongodb');
+
+let mainWindow;
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+  mainWindow.loadFile('src/renderer/login.html');
+}
+
+ipcMain.handle('authenticate-user', async (event, email, password) => {
+  try {
+    const result = await authenticateUser(email, password);
+    return result;
+  } catch (e) {
+    console.error('❌ Error en autenticación desde main.js:', e);
+    return null;
+  }
+});
+
+ipcMain.handle('get-juegos-por-vocal', async (event, vocal) => {
+  try {
+    const juegos = await getJuegosPorVocal(vocal);
+    return juegos;
+  } catch (e) {
+    console.error('❌ Error al obtener juegos por vocal desde main.js:', e);
+    return [];
+  }
+});
+
+ipcMain.handle('get-juegos-incorrectos', async (event, vocal) => {
+  try {
+    const juegos = await getJuegosIncorrectos(vocal);
+    return juegos;
+  } catch (e) {
+    console.error('❌ Error al obtener juegos incorrectos desde main.js:', e);
+    return [];
+  }
+});
+
+ipcMain.handle('update-user-progress', async (event, userId, vocal) => {
+  try {
+    await updateUserProgress(userId, vocal);
+    return { success: true };
+  } catch (e) {
+    console.error('❌ Error al actualizar progreso desde main.js:', e);
+    return { success: false };
+  }
+});
+
+ipcMain.handle('get-user-progress', async (event, userId) => {
+  try {
+    const progress = await getUserProgress(userId);
+    return progress;
+  } catch (e) {
+    console.error('❌ Error al obtener progreso desde main.js:', e);
+    return { 'a': 0, 'e': 0, 'i': 0, 'o': 0, 'u': 0 };
+  }
+});
+
+ipcMain.handle('register-user', async (event, data) => {
+  try {
+    const result = await insertUser(data);
+    return result;
+  } catch (e) {
+    console.error('❌ Error al registrar usuario desde main.js:', e);
+    return { success: false, message: 'Error al registrar el usuario.' };
+  }
+});
+
+ipcMain.on('redirect-to-login', () => {
+  console.log('🟡 Redirigiendo a login.html desde main.js');
+  if (mainWindow) {
+    mainWindow.loadFile('src/renderer/login.html');
+  }
+});
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});

@@ -1,0 +1,20 @@
+{
+  "name": "preschool-app",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "electron": "^22.0.0",
+    "howler": "2.2.4",
+    "mongodb": "^6.8.0",
+    "plotly.js": "^2.27.0",
+    "r-script": "^0.0.4"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  }
+}
