@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser } = require('./src/db/mongodb');
+const express = require('express');
+const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser, getAllUsersProgress } = require('./src/db/mongodb');
 
 let mainWindow;
 
@@ -16,6 +17,24 @@ function createWindow() {
   });
   mainWindow.loadFile('src/renderer/login.html');
 }
+
+// Configurar servidor Express
+const expressApp = express();
+const port = 3000;
+
+expressApp.get('/api/progress', async (req, res) => {
+  try {
+    const progressData = await getAllUsersProgress();
+    res.json(progressData);
+  } catch (e) {
+    console.error('❌ Error al obtener datos de progreso:', e);
+    res.status(500).json({ error: 'Error al obtener datos de progreso' });
+  }
+});
+
+expressApp.listen(port, () => {
+  console.log(`🟢 Servidor Express iniciado en http://localhost:${port}`);
+});
 
 ipcMain.handle('authenticate-user', async (event, email, password) => {
   try {
