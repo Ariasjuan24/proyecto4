@@ -3,7 +3,8 @@ library(httr)
 library(jsonlite)
 library(ggplot2)
 library(dplyr)
-library(tidyr) # Añadido para pivot_longer
+library(tidyr)
+library(websocket)
 
 # Función para obtener datos del endpoint
 fetch_progress_data <- function() {
@@ -35,8 +36,33 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
-  # Obtener datos periódicamente
-  progressData <- reactivePoll(
+  # Variable reactiva para controlar actualizaciones
+  rv <- reactiveValues(trigger = 0)
+
+  # Conectar a WebSocket
+  ws <- WebSocket$new("ws://localhost:8080")
+  ws$onOpen(function(event) {
+    print("🟢 Conexión WebSocket abierta")
+  })
+  ws$onMessage(function(event) {
+    print("🟢 Mensaje WebSocket recibido")
+    rv$trigger <- rv$trigger + 1
+  })
+  ws$onError(function(event) {
+    print("❌ Error en WebSocket")
+  })
+  ws$onClose(function(event) {
+    print("🟡 Conexión WebSocket cerrada")
+  })
+
+  # Obtener datos cuando se activa el trigger o periódicamente
+  progressData <- reactive({
+    rv$trigger
+    fetch_progress_data()
+  })
+
+  # Obtener datos periódicamente como fallback
+  progressDataFallback <- reactivePoll(
     intervalMillis = reactive(input$updateInterval * 1000),
     session = session,
     checkFunc = function() {
@@ -45,6 +71,13 @@ server <- function(input, output, session) {
     valueFunc = fetch_progress_data
   )
 
+  # Seleccionar la fuente de datos: WebSocket si disponible, de lo contrario fallback
+  observe({
+    if (is.null(progressData())) {
+      progressData <- progressDataFallback
+    }
+  })
+
   # Gráfico de progreso promedio por vocal
   output$averageProgressPlot <- renderPlot({
     data <- progressData()
@@ -52,7 +85,6 @@ server <- function(input, output, session) {
       return(ggplot() + ggtitle("No se pudieron obtener datos"))
     }
 
-    # Calcular promedio por vocal
     averages <- data %>%
       rowwise() %>%
       mutate(
@@ -86,7 +118,6 @@ server <- function(input, output, session) {
       return(ggplot() + ggtitle("No se pudieron obtener datos"))
     }
 
-    # Preparar datos para el gráfico
     progress_long <- data %>%
       rowwise() %>%
       mutate(
@@ -106,6 +137,11 @@ server <- function(input, output, session) {
       theme_minimal() +
       labs(title = "Progreso Individual por Usuario", y = "Progreso", x = "Vocal") +
       scale_fill_manual(values = c("a" = "#FF6F61", "e" = "#6B5B95", "i" = "#88B04B", "o" = "#F7CAC9", "u" = "#92A8D1"))
+  })
+
+  # Asegurarse de cerrar WebSocket al finalizar la sesión
+  onSessionEnded(function() {
+    ws$close()
   })
 }
 

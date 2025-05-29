@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const express = require('express');
+const WebSocket = require('ws');
 const { authenticateUser, getJuegosPorVocal, getJuegosIncorrectos, updateUserProgress, getUserProgress, insertUser, getAllUsersProgress } = require('./src/db/mongodb');
 
 let mainWindow;
@@ -36,6 +37,33 @@ expressApp.listen(port, () => {
   console.log(`🟢 Servidor Express iniciado en http://localhost:${port}`);
 });
 
+// Configurar WebSocket
+const wss = new WebSocket.Server({ port: 8080 });
+
+wss.on('connection', (ws) => {
+  console.log('🟢 Cliente WebSocket conectado');
+  ws.on('message', (message) => {
+    console.log(`🟡 Mensaje recibido: ${message}`);
+  });
+});
+
+ipcMain.handle('update-user-progress', async (event, userId, vocal) => {
+  try {
+    await updateUserProgress(userId, vocal);
+    // Notificar a todos los clientes WebSocket
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ event: 'progressUpdated', userId, vocal }));
+      }
+    });
+    return { success: true };
+  } catch (e) {
+    console.error('❌ Error al actualizar progreso desde main.js:', e);
+    return { success: false };
+  }
+});
+
+// Otros handlers...
 ipcMain.handle('authenticate-user', async (event, email, password) => {
   try {
     const result = await authenticateUser(email, password);
@@ -66,16 +94,6 @@ ipcMain.handle('get-juegos-incorrectos', async (event, vocal) => {
   }
 });
 
-ipcMain.handle('update-user-progress', async (event, userId, vocal) => {
-  try {
-    await updateUserProgress(userId, vocal);
-    return { success: true };
-  } catch (e) {
-    console.error('❌ Error al actualizar progreso desde main.js:', e);
-    return { success: false };
-  }
-});
-
 ipcMain.handle('get-user-progress', async (event, userId) => {
   try {
     const progress = await getUserProgress(userId);
@@ -94,6 +112,10 @@ ipcMain.handle('register-user', async (event, data) => {
     console.error('❌ Error al registrar usuario desde main.js:', e);
     return { success: false, message: 'Error al registrar el usuario.' };
   }
+});
+
+ipcMain.handle('get-shiny-port', () => {
+  return 5318; // Placeholder, ajusta si Shiny usa otro puerto
 });
 
 ipcMain.on('redirect-to-login', () => {
